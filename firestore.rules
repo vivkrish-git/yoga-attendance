@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      // Phase 1: Open access (no auth)
+      // TODO Phase 2: Add Firebase Auth and restrict access
+      allow read, write: if true;
+    }
+  }
+}
