@@ -30,11 +30,12 @@ A mobile-friendly web application for a yoga instructor to track student attenda
 
 - **Source:** Google Sheets, published as CSV
 - **Published CSV URL:** Stored in `.env` as `VITE_GOOGLE_SHEET_CSV_URL`
-- **Sheet name:** `Personal Health Status (Responses)`
-- **Column to read:** `Name`
-- The app fetches this CSV, parses it, and extracts only the `Name` column.
-- The app caches the master list locally (in Firestore, under a `masterList` collection or document).
+- **Sheet columns:** `Mihira Morning`, `Mihira Evening`, `Online`
+- The app fetches this CSV, parses **all 3 columns**, combines all names into one deduplicated master list (~33 names).
+- The same URL is used for default session column lists (no separate env var needed).
+- The app caches the master list locally (in Firestore, under `config/masterList`).
 - Refresh is **manual only** — triggered by a "Refresh Master List" button in the UI.
+- Refresh updates **both** `config/masterList` (combined names) and `config/defaultSessions` (per-column names) in one action using `Promise.allSettled` — default sessions refresh failure is non-fatal.
 - The app must store and display the **last refresh timestamp**.
 - Names should be displayed in **alphabetical order** everywhere in the app.
 - The app **never writes** to the Google Sheet.
@@ -67,11 +68,22 @@ Each document represents one yoga session.
 
 ### Collection: `config`
 
-A single document `masterList` to cache the student names.
+Two documents:
 
+**`config/masterList`** — combined master list of all students.
 ```
 {
-  names: string[] (alphabetically sorted),
+  names: string[] (alphabetically sorted, deduplicated across all 3 columns),
+  lastRefreshedAt: Firestore Timestamp
+}
+```
+
+**`config/defaultSessions`** — per-column student lists for default session creation.
+```
+{
+  "Mihira Morning": string[] (alphabetically sorted),
+  "Mihira Evening": string[] (alphabetically sorted),
+  "Online": string[] (alphabetically sorted),
   lastRefreshedAt: Firestore Timestamp
 }
 ```
@@ -99,14 +111,25 @@ This screen handles both creating new sessions and editing past sessions.
 - Screen title: "Take Attendance"
 
 #### Session Selection Area (top section):
-- **"Create New Session" button** — opens an inline form or modal:
-  - Text field: **Session Name** (required, e.g., "Apartment_7_to_8am")
+
+**Create Default Session (bordered teal group):**
+- Three buttons: **Mihira Morning**, **Mihira Evening**, **Online**
+- On click: reads column-specific names from `config/defaultSessions` cache, creates a session named `<Type>-DD-MON-YYYY` (date in IST, e.g. `Mihira Morning-11-APR-2026`), opens attendance marking view showing only that column's students
+- **Duplicate guard:** if a session with that name already exists today, shows an amber warning with "Open Existing" / "Cancel" options instead of creating a new one
+
+**"Create Session" button** — opens an inline form:
+  - Text field: **Session Name** (required)
   - Text field: **Description** (optional)
-  - "Create" button → creates the session document in Firestore with current date/time, then loads the attendance marking view
-- **"Edit Past Session" dropdown/list** — shows a scrollable list of past sessions ordered by `createdAt` descending (most recent first). Each item shows:
-  - Session name
-  - Date and time
-  - Tap to open → loads that session's attendance for editing
+  - "Create" button → creates session in Firestore, loads attendance marking view
+
+**"Edit Session" button** — shows a scrollable list of past sessions ordered by `createdAt` descending. Tap to open → loads that session's attendance for editing.
+
+**"Delete Session" button** — shows all sessions as a scrollable checklist:
+  - Each row: checkbox + session name + date
+  - Selecting sessions highlights them in red
+  - **"Delete N Session(s)"** button appears at the bottom once sessions are selected
+  - Tapping it shows a confirmation prompt: "Are you sure you want to delete N session(s)? This cannot be undone." with **"Yes, Delete"** and **"Cancel"** buttons
+  - On confirm: permanently deletes selected sessions from Firestore, returns to menu
 
 #### Attendance Marking View (main area, shown after session is created/selected):
 - **Session info bar** at top: session name, date/time, last edited time
@@ -124,11 +147,10 @@ This screen handles both creating new sessions and editing past sessions.
   - Shows a success confirmation (e.g., toast message)
   - **No auto-save.** Only saves when this button is pressed. This is intentional to minimize server calls.
 - **"Refresh Master List" button** (small, in a settings/utility area):
-  - Fetches the CSV from the Google Sheet URL
-  - Parses and extracts the `Name` column
-  - Updates the Firestore `config/masterList` document
+  - Fetches the CSV from `VITE_GOOGLE_SHEET_CSV_URL`
+  - Updates **both** `config/masterList` (all names combined) and `config/defaultSessions` (per-column names) in parallel
   - Updates the `lastRefreshedAt` timestamp
-  - Displays: "Last refreshed: [date/time]"
+  - Displays: "Last refreshed: [date/time]" and "N students loaded"
 
 ---
 
@@ -143,10 +165,10 @@ This screen handles both creating new sessions and editing past sessions.
 ##### Tab A: "By Session"
 - Scrollable list of all past sessions, ordered by `createdAt` descending.
 - Each item shows: session name, date, number of attendees (e.g., "15 attended").
-- Tap a session → expands or navigates to a detail view:
-  - Shows the **full master list** with present/absent indicators (✓ / ✗ or highlighted/greyed out)
-  - Ad-hoc attendees shown separately at the bottom
-  - Session metadata: name, description, created date/time, last edited date/time
+- Tap a session → expands to a detail view:
+  - Shows **only the students who attended** (✓ list, alphabetically sorted) — absent students are not shown
+  - Ad-hoc attendees shown separately at the bottom with italic style and "ad-hoc" badge
+  - Session metadata: description (if any), comments (if any), last edited date/time, total count
 
 ##### Tab B: "By Student"
 - **Student name selector**: dropdown or searchable field listing all students from the master list (alphabetical).
@@ -252,12 +274,12 @@ yoga-attendance-1/
 │   ├── firebase.js            # Firebase initialization & config
 │   ├── components/
 │   │   ├── LandingPage.jsx
-│   │   ├── AttendanceScreen.jsx
-│   │   ├── SessionForm.jsx          # Create new session form
+│   │   ├── AttendanceScreen.jsx     # Orchestrates all attendance views incl. delete
+│   │   ├── SessionForm.jsx          # Create session form
 │   │   ├── SessionList.jsx          # List of past sessions (reused)
 │   │   ├── AttendanceMarker.jsx     # Checkbox list + search + save
 │   │   ├── ReportsScreen.jsx
-│   │   ├── ReportBySession.jsx
+│   │   ├── ReportBySession.jsx      # Shows only attendees (no absent list)
 │   │   ├── ReportByStudent.jsx
 │   │   └── common/
 │   │       ├── Header.jsx           # Top nav bar with back button
@@ -265,11 +287,12 @@ yoga-attendance-1/
 │   │       ├── StudentCheckbox.jsx  # Single student row with checkbox
 │   │       └── Toast.jsx            # Success/error notification
 │   ├── services/
-│   │   ├── sessionService.js        # Firestore CRUD for sessions
-│   │   ├── masterListService.js     # Fetch CSV + cache in Firestore
+│   │   ├── sessionService.js        # Firestore CRUD for sessions (incl. deleteSessions)
+│   │   ├── masterListService.js     # Fetch CSV (all 3 cols) + cache in Firestore
+│   │   ├── defaultSessionsService.js # Per-column lists for default session creation
 │   │   └── reportService.js         # Query logic for reports
 │   ├── hooks/
-│   │   ├── useMasterList.js         # Hook to load/refresh master list
+│   │   ├── useMasterList.js         # Hook to load/refresh master list + default sessions
 │   │   └── useSessions.js           # Hook to load sessions
 │   └── styles/
 │       └── index.css                # Global styles (mobile-first)
@@ -281,19 +304,23 @@ yoga-attendance-1/
 
 ### Fetching the Google Sheet CSV
 ```javascript
-// Pseudocode — URL comes from environment variable
-const CSV_URL = import.meta.env.VITE_GOOGLE_SHEET_CSV_URL;
+// One URL for everything — VITE_GOOGLE_SHEET_CSV_URL
+// Sheet has 3 columns: "Mihira Morning", "Mihira Evening", "Online"
 
-async function fetchMasterList() {
-  const response = await fetch(CSV_URL);
-  const csvText = await response.text();
-  // Parse CSV, extract "Name" column, sort alphabetically
-  // Save to Firestore config/masterList with timestamp
-}
+// masterListService.js — combines all 3 columns into one master list
+const SESSION_COLUMNS = ['Mihira Morning', 'Mihira Evening', 'Online'];
+const allNames = parsed.data.flatMap(row =>
+  SESSION_COLUMNS.map(col => (row[col] || '').trim()).filter(n => n.length > 0)
+);
+const names = [...new Set(allNames)].sort((a, b) => a.localeCompare(b));
+
+// defaultSessionsService.js — saves per-column lists to config/defaultSessions
+// Used when creating default sessions to scope the student list to that column only
 ```
 
-- Use a lightweight CSV parser (e.g., `papaparse` npm package).
-- Handle edge cases: empty names, whitespace trimming, duplicate names.
+- Uses `papaparse` npm package (already in project).
+- Handle edge cases: empty names, whitespace trimming, duplicate names (deduplication via `Set`).
+- IST date used for default session names: `toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', ... })`
 
 ### Firestore Queries for Reports
 - **By Session:** `collection("sessions").orderBy("createdAt", "desc")`
@@ -380,20 +407,26 @@ These values come from the Firebase Console → Project Settings → Your App �
 ## Current Implementation Status (Phase 1 — Complete)
 
 - ✅ Landing page with "Take Attendance" and "View Reports"
-- ✅ Create new session (name + description + comments)
+- ✅ Create session (name + description + comments)
 - ✅ Mark attendance from master list (checkboxes, search, ad-hoc attendees)
 - ✅ Manual save to Firestore
 - ✅ Edit past sessions
+- ✅ Delete past sessions (multi-select with confirmation prompt)
 - ✅ Google Sheets CSV fetch + Firestore cache with manual refresh
-- ✅ Reports: By Session (expand to see full ✓/✗ list)
+- ✅ Master list = all names combined from Mihira Morning + Mihira Evening + Online columns
+- ✅ Default session buttons (Mihira Morning, Mihira Evening, Online) with IST date naming
+- ✅ Default sessions show only column-specific students in attendance marking view
+- ✅ Duplicate session guard for default sessions (open existing or cancel)
+- ✅ Refresh Master List updates both master list and default session column caches
+- ✅ Reports: By Session (expand to see only present students, alphabetically sorted)
 - ✅ Reports: By Student (name + date range → count + breakdown)
 - ✅ Mobile-first responsive UI (teal/green theme)
 - ✅ Deployed to Firebase Hosting
 
 ### Known Enhancements (Backlog)
 
-- Unique session name constraint (prevent duplicate names — approach TBD)
 - Firestore composite index for date-range queries (may be needed as data grows)
+- Editing a past default session falls back to full master list (not column-specific)
 
 ---
 
