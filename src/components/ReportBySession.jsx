@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import useSessions from '../hooks/useSessions';
-import useMasterList from '../hooks/useMasterList';
 
 function formatDate(timestamp) {
   if (!timestamp) return '';
@@ -16,7 +15,6 @@ function formatDate(timestamp) {
 
 function ReportBySession() {
   const { sessions, loading } = useSessions();
-  const { names: masterNames } = useMasterList();
   const [expandedId, setExpandedId] = useState(null);
 
   if (loading) return <p className="section text-muted">Loading sessions...</p>;
@@ -58,32 +56,26 @@ function ReportBySession() {
                   Last edited: {formatDate(s.lastEditedAt)}
                 </p>
                 <p className="text-muted mb-1" style={{ fontWeight: 600 }}>
-                  {totalPresent} of {masterNames.length} students present
+                  {totalPresent} attended
                 </p>
 
-                {/* Full master list with status */}
+                {/* Present attendees only */}
                 <div style={{ marginTop: 8 }}>
-                  {masterNames.map((name) => {
-                    const present = attendees.includes(name);
-                    return (
-                      <div
-                        key={name}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          padding: '6px 0',
-                          borderBottom: '1px solid #f0f0f0',
-                          opacity: present ? 1 : 0.5,
-                        }}
-                      >
-                        <span className={`attendance-status ${present ? 'status-present' : 'status-absent'}`}>
-                          {present ? '✓' : '✗'}
-                        </span>
-                        <span style={{ fontSize: '0.95rem' }}>{name}</span>
-                      </div>
-                    );
-                  })}
+                  {[...attendees].sort((a, b) => a.localeCompare(b)).map((name) => (
+                    <div
+                      key={name}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 0',
+                        borderBottom: '1px solid #f0f0f0',
+                      }}
+                    >
+                      <span className="attendance-status status-present">✓</span>
+                      <span style={{ fontSize: '0.95rem' }}>{name}</span>
+                    </div>
+                  ))}
 
                   {/* Ad-hoc attendees */}
                   {adHoc.length > 0 && (

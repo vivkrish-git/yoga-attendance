@@ -4,23 +4,24 @@ import Papa from 'papaparse';
 
 const CSV_URL = import.meta.env.VITE_GOOGLE_SHEET_CSV_URL;
 
+// Columns to read from the sheet — all names across these columns form the master list
+const SESSION_COLUMNS = ['Mihira Morning', 'Mihira Evening', 'Online'];
+
 const MASTER_LIST_REF = doc(db, 'config', 'masterList');
 
-// Fetch CSV from Google Sheets, parse Name column, save to Firestore
+// Fetch CSV from Google Sheets, combine all session columns into one master list
 export async function refreshMasterList() {
   const response = await fetch(CSV_URL);
   const csvText = await response.text();
 
-  const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+  const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: false });
 
-  // Extract Name column, trim whitespace, remove blanks, deduplicate, sort
-  const names = [
-    ...new Set(
-      parsed.data
-        .map((row) => (row['Name'] || '').trim())
-        .filter((name) => name.length > 0)
-    ),
-  ].sort((a, b) => a.localeCompare(b));
+  // Collect all names from all 3 columns, deduplicate, sort alphabetically
+  const allNames = parsed.data.flatMap((row) =>
+    SESSION_COLUMNS.map((col) => (row[col] || '').trim()).filter((n) => n.length > 0)
+  );
+
+  const names = [...new Set(allNames)].sort((a, b) => a.localeCompare(b));
 
   await setDoc(MASTER_LIST_REF, {
     names,

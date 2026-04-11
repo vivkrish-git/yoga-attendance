@@ -5,6 +5,7 @@ import {
   updateDoc,
   getDoc,
   getDocs,
+  deleteDoc,
   query,
   orderBy,
   Timestamp,
@@ -51,4 +52,9 @@ export async function getAllSessions() {
   const q = query(SESSIONS_COL, orderBy('createdAt', 'desc'));
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+// Delete multiple sessions by their IDs
+export async function deleteSessions(sessionIds) {
+  await Promise.all(sessionIds.map((id) => deleteDoc(doc(db, 'sessions', id))));
 }
